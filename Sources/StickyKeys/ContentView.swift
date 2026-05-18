@@ -72,12 +72,15 @@ struct ContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Divider()
-            HStack {
+            HStack(spacing: 10) {
                 Spacer()
-                Button("Quit StickyKeys") { NSApplication.shared.terminate(nil) }
-                    .font(.system(size: 11))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Image(systemName: "power")
+                }
+                .controlSize(.small)
+                .help("Quit StickyKeys")
             }
         }
         .padding(14)
