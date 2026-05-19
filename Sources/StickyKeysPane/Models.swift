@@ -20,18 +20,42 @@ final class LockStore {
     @ObservationIgnored var onLockChange: ((Bool) -> Void)?
     @ObservationIgnored private var safetyTimer: Timer?
     @ObservationIgnored private var tickTimer: Timer?
+    /// One prompt + one Settings jump per launch. macOS TCC is keyed
+    /// to the HOST process's identity, so a merged StickyKeys (whose
+    /// host is the launcher, not StickyKeys.app) may never be
+    /// auto-granted — without this guard every lock attempt would
+    /// re-spawn the system prompt and re-open System Settings.
+    @ObservationIgnored private var didRequest = false
+
+    /// The app actually hosting this pane: "MattsSoftware" when
+    /// merged into the launcher, "StickyKeys" when standalone. The
+    /// Accessibility / Input Monitoring grant must go to THIS app —
+    /// granting it to a different one (e.g. StickyKeys.app while the
+    /// launcher hosts the pane) has no effect.
+    var hostAppName: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleName")
+            as? String) ?? ProcessInfo.processInfo.processName
+    }
 
     func refreshPermission() {
         permitted = keyboard.isPermitted
+        if permitted { lastError = nil; didRequest = false }
     }
 
     func requestPermission() {
-        _ = keyboard.promptForPermission()
-        if let url = URL(string:
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
         refreshPermission()
+        guard !permitted else { return }
+        if !didRequest {
+            didRequest = true
+            _ = keyboard.promptForPermission()
+            if let url = URL(string:
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        lastError = "Grant Accessibility (and Input Monitoring) to "
+            + "“\(hostAppName)” in System Settings → Privacy & "
+            + "Security, then try locking again."
     }
 
     func toggle() { isLocked ? unlock() : lock() }
@@ -40,14 +64,15 @@ final class LockStore {
         guard !isLocked else { return }
         refreshPermission()
         guard permitted else {
-            lastError = "Accessibility permission needed."
-            requestPermission()
+            requestPermission()   // sets host-aware guidance (throttled)
             return
         }
         guard keyboard.start() else {
             permitted = false
-            lastError = "macOS rejected the keyboard tap — grant Accessibility & Input Monitoring."
             requestPermission()
+            lastError = "macOS blocked the keyboard tap — “\(hostAppName)” "
+                + "needs Accessibility & Input Monitoring. Grant it in "
+                + "System Settings, then retry."
             return
         }
         lastError = nil

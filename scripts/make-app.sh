@@ -37,6 +37,17 @@ fi
 
 cp "$BIN/StickyKeys" "$APP/Contents/MacOS/StickyKeys"
 
+# ── Embed + (below) sign the SuiteKit contract and this
+# app's pane dylib so the MattsSoftware launcher can load
+# the SAME code out of this installed .app. rpath lets the
+# bundled exe find them under Contents/Frameworks.
+mkdir -p "$APP/Contents/Frameworks"
+cp "$BIN/libSuiteKit.dylib" "$APP/Contents/Frameworks/"
+cp "$BIN/libStickyKeysPane.dylib" "$APP/Contents/Frameworks/"
+if [ -d "$BIN/StickyKeysPane_StickyKeysPane.bundle" ]; then cp -R "$BIN/StickyKeysPane_StickyKeysPane.bundle" "$APP/Contents/Frameworks/"; fi
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/StickyKeys" 2>/dev/null || true
+
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -60,6 +71,10 @@ PLIST
 
 # Sign with the Developer ID (hardened runtime, distribution-ready).
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/libSuiteKit.dylib"
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/libStickyKeysPane.dylib"
   codesign --force --options runtime --timestamp \
     --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/StickyKeys"
   codesign --force --options runtime --timestamp \

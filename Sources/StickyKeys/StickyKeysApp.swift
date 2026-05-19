@@ -1,64 +1,64 @@
 import SwiftUI
 import AppKit
+import StickyKeysPane
+import SuiteKit
 
+// Standalone StickyKeys. Post-split this is just a host shim — the
+// lock engine, overlay, store and UI live in `StickyKeysPane` so the
+// MattsSoftware launcher can load the same code out of an installed
+// StickyKeys.app. Behaviour unchanged (incl. click-to-unlock).
 @main
 struct StickyKeysApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-
-    var body: some Scene {
-        // Accessory app: the real UI is the status item / popover / overlay
-        // the delegate manages. This scene stays empty.
-        Settings { EmptyView() }
-    }
+    var body: some Scene { Settings { EmptyView() } }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    let store = LockStore()
+final class AppDelegate: NSObject, NSApplicationDelegate,
+    NSPopoverDelegate
+{
+    private let pane = StickyKeysPaneProvider()
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
-    private let overlay = OverlayController()
     private var clickMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        SuiteGuard.exitIfDeferring("stickykeys")
+
         NSApp.setActivationPolicy(.accessory)
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(
+            withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = Self.icon(locked: false)
+            button.image = pane.paneMenuBarImage()
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
-
-        popover.behavior = .transient
-        popover.delegate = self
-        popover.contentViewController = NSHostingController(
-            rootView: ContentView().environment(store)
-        )
-
-        store.refreshPermission()
-        store.onLockChange = { [weak self] locked in
-            guard let self else { return }
-            self.statusItem.button?.image = Self.icon(locked: locked)
-            if locked {
-                if self.popover.isShown { self.popover.performClose(nil) }
-                self.overlay.show(store: self.store)
-            } else {
-                self.overlay.hide()
+        pane.onMenuBarImageChange = { [weak self] img in
+            self?.statusItem.button?.image = img
+        }
+        pane.onLockChange = { [weak self] locked in
+            if locked, self?.popover.isShown == true {
+                self?.popover.performClose(nil)
             }
         }
+
+        let vc = NSViewController()
+        vc.view = pane.paneMakeView()
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = vc
+
+        pane.paneStart()
     }
 
     @objc private func togglePopover(_ sender: Any?) {
-        // While locked, a click on the menu-bar icon is a fast unlock.
-        if store.isLocked {
-            store.unlock()
-            return
-        }
-        if popover.isShown {
-            popover.performClose(sender)
-        } else if let button = statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // While locked, a menu-bar click is a fast unlock.
+        if pane.isLocked { pane.unlock(); return }
+        if popover.isShown { popover.performClose(sender) }
+        else if let button = statusItem.button {
+            popover.show(relativeTo: button.bounds, of: button,
+                         preferredEdge: .minY)
             if let win = popover.contentViewController?.view.window {
                 clampOnScreen(win, anchoredTo: button)
                 win.makeKey()
@@ -67,16 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if let m = clickMonitor { NSEvent.removeMonitor(m) }
             clickMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-            ) { [weak self] _ in
-                self?.popover.performClose(nil)
-            }
+            ) { [weak self] _ in self?.popover.performClose(nil) }
         }
     }
 
-    /// Keep the popover fully on the screen that holds the status
-    /// item. NSPopover centers on the icon and clips when the icon
-    /// is near a screen edge (notably far right / next to the
-    /// notch); shift the window back inside the visible frame.
     private func clampOnScreen(_ win: NSWindow, anchoredTo anchor: NSView) {
         guard let screen = anchor.window?.screen ?? NSScreen.main
         else { return }
@@ -91,15 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         if let m = clickMonitor {
-            NSEvent.removeMonitor(m)
-            clickMonitor = nil
+            NSEvent.removeMonitor(m); clickMonitor = nil
         }
-    }
-
-    private static func icon(locked: Bool) -> NSImage? {
-        let name = locked ? "lock.fill" : "keyboard"
-        let img = NSImage(systemSymbolName: name, accessibilityDescription: "StickyKeys")
-        img?.isTemplate = true
-        return img
     }
 }
